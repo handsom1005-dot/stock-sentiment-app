@@ -1,173 +1,254 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Dec  7 16:36:43 2025
-
-@author: yjc
-"""
-
 import streamlit as st
 import yfinance as yf
+import pandas as pd
 
 # 設定網頁標題與排版
-st.set_page_config(page_title="市場情緒量化指標", page_icon="📈")
+st.set_page_config(page_title="市場情緒量化投資儀表板 v2.0", page_icon="🧭", layout="wide")
 
-st.title("📈 市場情緒量化投資儀表板")
+st.title("🧭 市場情緒量化投資儀表板 v2.0")
+st.markdown("依據「六大指標權重」計算綜合市場分數 (-8 ~ +8)，協助判斷進出場時機。")
 st.markdown("---")
 
-# 定義計分邏輯函數
-def calculate_score(fear_greed, mcclellan, put_call, vix):
-    score = 0
-    details = []
+# ==========================================
+# 1. 定義評分邏輯函數 (依照 PDF 規則)
+# ==========================================
 
-    # 1. Fear & Greed Index
-    # 邏輯：≤20 (+2), 30-70 (0), ≥80 (-2)
-    s1 = 0
-    if fear_greed <= 20:
-        s1 = 2
-    elif fear_greed >= 80:
-        s1 = -2
+def get_fg_score(value):
+    # 恐懼貪婪: 0-25(+2), 26-44(+1), 45-55(0), 56-74(-1), 75-100(-2) [cite: 13-17]
+    if value <= 25: return 2
+    elif value <= 44: return 1
+    elif value <= 55: return 0
+    elif value <= 74: return -1
+    else: return -2
+
+def get_mcclellan_score(value):
+    # McClellan: <=-100(+2), -100~-50(+1), -50~+50(0), +50~+100(-1), >100(-2) [cite: 23-27]
+    if value <= -100: return 2
+    elif value <= -50: return 1
+    elif value <= 50: return 0
+    elif value <= 100: return -1
+    else: return -2
+
+def get_pc_score(value):
+    # Put/Call: >=1.0(+2), 0.8-0.99(+1), 0.6-0.79(0), 0.5-0.59(-1), <0.5(-2) [cite: 32-36]
+    if value >= 1.0: return 2
+    elif value >= 0.8: return 1
+    elif value >= 0.6: return 0
+    elif value >= 0.5: return -1
+    else: return -2
+
+def get_vix_score(value):
+    # VIX: >=40(+2), 30-39(+1), 15-29(0), 12-14(-1), <12(-2) [cite: 41-45]
+    if value >= 40: return 2
+    elif value >= 30: return 1
+    elif value >= 15: return 0
+    elif value >= 12: return -1
+    else: return -2
+
+def get_bias_score(value):
+    # 200日乖離率: <=-20%(+2), -20~-10%(+1), -10~+10%(0), +10~+15%(-1), >+15%(-2) [cite: 51-54]
+    # 輸入值為百分比整數 (例如 15 代表 15%)
+    if value <= -20: return 2
+    elif value <= -10: return 1
+    elif value <= 10: return 0
+    elif value <= 15: return -1
+    else: return -2
+
+def get_pe_score(value):
+    # Forward P/E: <=15(+2), 15-18(+1), 18-22(0), 22-25(-1), >=25(-2) [cite: 59-63]
+    # 注意 PDF 邊界重疊部分，這裡採用常見邏輯劃分
+    if value <= 15: return 2
+    elif value < 18: return 1
+    elif value <= 22: return 0
+    elif value < 25: return -1
+    else: return -2
+
+# ==========================================
+# 2. 自動抓取輔助數據 (VIX & SPX Bias)
+# ==========================================
+try:
+    # 抓取 VIX
+    vix_ticker = yf.Ticker("^VIX")
+    vix_hist = vix_ticker.history(period="1d")
+    default_vix = round(float(vix_hist['Close'].iloc[-1]), 2) if not vix_hist.empty else 15.0
+
+    # 抓取 S&P 500 並計算乖離率
+    spx_ticker = yf.Ticker("^GSPC")
+    spx_hist = spx_ticker.history(period="300d") # 抓足夠天數算均線
+    if not spx_hist.empty:
+        current_price = spx_hist['Close'].iloc[-1]
+        ma200 = spx_hist['Close'].rolling(window=200).mean().iloc[-1]
+        # 公式: (Price - 200DMA) / 200DMA * 100
+        bias_calc = ((current_price - ma200) / ma200) * 100
+        default_bias = round(float(bias_calc), 2)
     else:
-        s1 = 0 # 包含 30-70 以及中間模糊地帶，視為中性
-    score += s1
-    details.append(f"恐懼貪婪 ({fear_greed}): {s1:+d} 分")
+        default_bias = 5.0
+except Exception as e:
+    default_vix = 15.0
+    default_bias = 5.0
 
-    # 2. McClellan Oscillator
-    # 邏輯：≤-80 (+2), -40~+40 (0), ≥70 (-2)
-    s2 = 0
-    if mcclellan <= -80:
-        s2 = 2
-    elif mcclellan >= 70:
-        s2 = -2
-    elif -40 <= mcclellan <= 40:
-        s2 = 0
-    else:
-        s2 = 0 # 模糊地帶視為中性
-    score += s2
-    details.append(f"McClellan ({mcclellan}): {s2:+d} 分")
-
-    # 3. Put/Call Ratio
-    # 邏輯：≥0.9 (+2), 0.5-0.8 (0), ≤0.5 (-2)
-    # 註：假設 >0.9 為極度恐慌（看多訊號），<0.5 為極度樂觀
-    s3 = 0
-    if put_call >= 0.9:
-        s3 = 2
-    elif put_call <= 0.5:
-        s3 = -2
-    else:
-        s3 = 0
-    score += s3
-    details.append(f"Put/Call Ratio ({put_call}): {s3:+d} 分")
-
-    # 4. VIX
-    # 邏輯：≥30 (+2), ≥40 (+3), 15-25 (0), ≤12 (-2)
-    s4 = 0
-    if vix >= 40:
-        s4 = 3
-    elif vix >= 30:
-        s4 = 2
-    elif vix <= 12:
-        s4 = -2
-    elif 15 <= vix <= 25:
-        s4 = 0
-    else:
-        s4 = 0 # 12-15 或 25-30 視為中性或過渡區
-    score += s4
-    details.append(f"VIX ({vix}): {s4:+d} 分")
-
-    return score, details
-
-# --- 側邊欄：輸入數據 ---
+# ==========================================
+# 3. 側邊欄：輸入 6 大指標
+# ==========================================
 st.sidebar.header("📊 輸入今日指標數據")
 
-# 嘗試自動抓取 VIX
-try:
-    vix_data = yf.Ticker("^VIX")
-    vix_today = vix_data.history(period="1d")['Close'].iloc[-1]
-    vix_default = round(float(vix_today), 2)
-    st.sidebar.success(f"已自動抓取 VIX: {vix_default}")
-except:
-    vix_default = 15.00
-    st.sidebar.warning("無法抓取 VIX，請手動輸入")
+# 1. Fear & Greed (15%)
+st.sidebar.markdown("### 1. 恐懼貪婪指數 (15%)")
+st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/charts/50108/cnn-fear-and-greed)")
+in_fg = st.sidebar.number_input("輸入數值 (0-100)", value=50, step=1)
 
-# 建立輸入欄位與參考連結
-st.sidebar.markdown("### 1. 恐懼貪婪指數")
-st.sidebar.markdown("[點此查詢 (Macromicro)](https://en.macromicro.me/charts/50108/cnn-fear-and-greed)")
-input_fg = st.sidebar.number_input("輸入數值", value=50, step=1, key="fg")
+# 2. McClellan Oscillator (15%)
+st.sidebar.markdown("### 2. McClellan Oscillator (15%)")
+st.sidebar.markdown("[查詢連結 (McOscillator)](https://www.mcoscillator.com/market_breadth_data/)")
+in_mcc = st.sidebar.number_input("輸入數值", value=0, step=1)
 
-st.sidebar.markdown("### 2. McClellan Oscillator")
-st.sidebar.markdown("[點此查詢 (McOscillator)](https://www.mcoscillator.com/market_breadth_data/)")
-input_mcc = st.sidebar.number_input("輸入數值", value=0, step=1, key="mcc")
+# 3. Put/Call Ratio (10%)
+st.sidebar.markdown("### 3. Put/Call Ratio (10%)")
+st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/charts/449/us-cboe-options-put-call-ratio)")
+in_pc = st.sidebar.number_input("輸入數值", value=0.65, step=0.01)
 
-st.sidebar.markdown("### 3. Put/Call Ratio")
-st.sidebar.markdown("[點此查詢 (Macromicro)](https://en.macromicro.me/charts/449/us-cboe-options-put-call-ratio)")
-input_pc = st.sidebar.number_input("輸入數值", value=0.65, step=0.01, format="%.2f", key="pc")
+# 4. VIX (15%)
+st.sidebar.markdown("### 4. VIX 恐慌指數 (15%)")
+st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/series/355/vix)")
+in_vix = st.sidebar.number_input("輸入數值", value=default_vix, step=0.1)
 
-st.sidebar.markdown("### 4. VIX 恐慌指數")
-st.sidebar.markdown("[點此查詢 (Macromicro)](https://en.macromicro.me/series/355/vix)")
-input_vix = st.sidebar.number_input("輸入數值", value=vix_default, step=0.1, format="%.2f", key="vix")
+# 5. 200日均線乖離率 (25%)
+st.sidebar.markdown("### 5. S&P 500 200日乖離率 (25%)")
+st.sidebar.markdown("[查詢連結 (Barchart)](https://www.barchart.com/stocks/quotes/$SPX/technical-analysis)")
+st.sidebar.caption(f"系統試算參考值: {default_bias}% (可手動修改)")
+in_bias = st.sidebar.number_input("輸入百分比 (例如 5 代表 5%)", value=default_bias, step=0.1)
 
-# --- 主畫面：計算與顯示 ---
+# 6. Forward P/E (20%)
+st.sidebar.markdown("### 6. Forward P/E Ratio (20%)")
+st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/series/20052/sp500-forward-pe-ratio)")
+in_pe = st.sidebar.number_input("輸入數值 (例如 20.5)", value=20.0, step=0.1)
 
-total_score, score_details = calculate_score(input_fg, input_mcc, input_pc, input_vix)
+# ==========================================
+# 4. 計算核心邏輯
+# ==========================================
 
-col1, col2 = st.columns([1, 2])
+# 取得原始分數 (-2 ~ +2)
+s1 = get_fg_score(in_fg)
+s2 = get_mcclellan_score(in_mcc)
+s3 = get_pc_score(in_pc)
+s4 = get_vix_score(in_vix)
+s5 = get_bias_score(in_bias)
+s6 = get_pe_score(in_pe)
+
+# 權重設定 [cite: 67]
+w1, w2, w3, w4, w5, w6 = 0.15, 0.15, 0.10, 0.15, 0.25, 0.20
+
+# 計算加權平均 (先除以2標準化為 -1~1，再乘權重) [cite: 72-73]
+weighted_sum = (
+    (s1/2 * w1) +
+    (s2/2 * w2) +
+    (s3/2 * w3) +
+    (s4/2 * w4) +
+    (s5/2 * w5) +
+    (s6/2 * w6)
+)
+
+# 最終分數放大 8 倍 (-8 ~ +8) [cite: 74]
+final_score = weighted_sum * 8
+final_score = round(final_score, 2)
+
+# ==========================================
+# 5. 主畫面顯示
+# ==========================================
+
+col1, col2 = st.columns([1, 1.5])
 
 with col1:
-    st.metric(label="市場情緒總分", value=f"{total_score} 分")
+    st.markdown("### 🎯 綜合市場情緒分數")
+    
+    # 根據分數給予顏色
+    score_color = "normal"
+    if final_score >= 2: score_color = "off" # Greenish equivalent for panic (buy)
+    elif final_score <= -2: score_color = "inverse" # Reddish equivalent for greed (sell)
+    
+    st.metric(label="範圍約 -8 ~ +8", value=f"{final_score} 分")
+    
+    # 顯示目前區間標籤
+    status_label = ""
+    if final_score >= 5: status_label = "💥 極度恐慌區 (強烈買進)"
+    elif final_score >= 2: status_label = "😨 恐慌區 (分批買進)"
+    elif final_score >= -1: status_label = "☁️ 正常區 (定期定額)"
+    elif final_score >= -4: status_label = "🔥 偏熱區 (暫停加碼)"
+    else: status_label = "🚨 過熱自滿區 (風險控管)"
+    
+    st.info(f"目前狀態：**{status_label}**")
 
 with col2:
-    st.write("#### 各項得分詳情：")
-    for detail in score_details:
-        st.text(detail)
+    st.markdown("#### 📊 各指標原始得分 (-2 ~ +2)")
+    metrics_data = {
+        "指標": ["恐懼貪婪", "McClellan", "Put/Call", "VIX", "200日乖離", "Forward P/E"],
+        "輸入值": [in_fg, in_mcc, in_pc, in_vix, f"{in_bias}%", in_pe],
+        "原始得分": [s1, s2, s3, s4, s5, s6],
+        "權重": ["15%", "15%", "10%", "15%", "25%", "20%"]
+    }
+    df = pd.DataFrame(metrics_data)
+    st.dataframe(df, hide_index=True)
 
 st.markdown("---")
 
-# --- 投資建議邏輯 ---
+# ==========================================
+# 6. 投資操作建議 (五個區間)
+# ==========================================
 st.header("💡 投資操作建議")
 
-if total_score >= 5:
-    st.error("🚨 **恐慌區 (總分 ≥ +5)**")
+# 邏輯區間 
+if final_score >= 5:
+    st.success("### 💎 極度恐慌區 (Score ≥ +5)")
     st.markdown("""
     * **狀態**：市場極度恐慌，這是最佳買點。
-    * **行動**：**積極分批買入**。
-    * **資金設定**：當月 ETF 扣款金額調成平常的 **1.5～2 倍**。
-    * **備註**：若手上有預備現金，可啟動一部分進場。
+    * **資金操作**：
+        1.  當月 ETF 扣款金額調成平時的 **1.5～2 倍**。
+        2.  若有預備現金 (退休金、預備金)，可啟動部分進場 (分 3-6 批)。
+    * **提醒**：嚴格避免槓桿與短線 All-in，預期可能還有 10-15% 跌幅。
     """)
 
-elif 0 <= total_score <= 4:
-    st.info("☁️ **正常區 (總分 0 ～ +4)**")
+elif 2 <= final_score < 5: # 包含 2~4.99
+    st.success("### 💰 恐慌區 (Score +2 ~ +4)")
     st.markdown("""
-    * **狀態**：市場情緒平穩或略微保守。
-    * **行動**：**照原定計畫定期定額**。
-    * **資金設定**：維持標準扣款金額。
+    * **狀態**：情緒恐懼，估值低於牛市平均。
+    * **資金操作**：
+        1.  ETF 扣款金額提升為平時的 **1.2～1.5 倍**。
+        2.  若股票比重低於目標 (如 50%)，可溫和加碼拉回長期目標 (如 60-70%)。
+    * **提醒**：只做「提早佈局」而非賭 V 型反轉，避免高槓桿。
     """)
 
-elif -4 <= total_score <= -1:
-    st.warning("🔥 **偏熱區 (總分 -1 ～ -4)**")
+elif -1 <= final_score < 2: # 包含 -1 ~ +1.99
+    st.info("### 🧘 正常區 (Score -1 ~ +1)")
     st.markdown("""
-    * **狀態**：市場開始興奮，風險逐漸升高。
-    * **行動**：**暫停加碼 / 僅做小額扣款**。
-    * **資金設定**：適度檢視資產配置，檢查股票比重是否過高。
+    * **狀態**：市場情緒與估值皆處於中性合理區間。
+    * **資金操作**：
+        1.  **照原定計畫定期定額**，不因短線波動亂調整。
+        2.  每 6-12 個月檢查資產配置，做小幅再平衡即可。
     """)
 
-elif total_score <= -5:
-    st.success("💥 **過熱 & 自滿區 (總分 ≤ -5)**") # 使用 Success 顏色反向提醒獲利了結/風控
+elif -4 <= final_score < -1: # 包含 -4 ~ -1.01
+    st.warning("### 🔥 偏熱區 (Score -1 ~ -4)")
     st.markdown("""
-    * **狀態**：市場極度貪婪，隨時可能反轉。
-    * **行動**：**做風險控管 / 資產再平衡**。
-    * **資金設定**：
-        1. **不再新增**股票部位。
-        2. 將股票部位調回原先目標（例如 80% 降回 60–70%）。
+    * **狀態**：市場開始貪婪，風險升高。
+    * **資金操作**：
+        1.  **暫停所有主動加碼**，僅保留小額定期定額 (例如平常的 50%)。
+        2.  檢視股票比重是否過高，可小幅獲利了結或轉入債券/現金。
+        3.  逐步減碼槓桿產品。
     """)
 
-# 顯示計分標準表圖供參考 (您可以自行截圖上傳或省略)
-with st.expander("查看計分標準參考表"):
+else: # score < -4
+    st.error("### 🚨 過熱自滿區 (Score < -4)")
     st.markdown("""
-    | 指標 | 恐慌 / 超賣 (+分) | 中性 (0分) | 貪婪 / 過熱 (-分) |
-    | :--- | :--- | :--- | :--- |
-    | **Fear & Greed** | ≤ 20 (+2) | 30-70 | ≥ 80 (-2) |
-    | **McClellan Osc** | ≤ -80 (+2) | -40~+40 | ≥ 70 (-2) |
-    | **Put/Call Ratio** | ≥ 0.9 (+2) | 0.5-0.8 | ≤ 0.5 (-2) |
-    | **VIX** | ≥ 30 (+2), ≥ 40 (+3) | 15-25 | ≤ 12 (-2) |
+    * **狀態**：市場極度貪婪，估值昂貴，隨時可能反轉。
+    * **資金操作**：
+        1.  **不再新增股票部位**，新資金暫放現金。
+        2.  **強力再平衡**：將股票部位調降回原先目標 (例如 80% → 60-70%)。
+        3.  對高風險/高 Beta 個股進行風險刪減。
     """)
+
+# 顯示計算公式詳情
+with st.expander("查看詳細計算公式"):
+    st.latex(r'''
+    Score_{final} = \left[ \sum_{i=1}^{6} \left( \frac{Score_i}{2} \times Weight_i \right) \right] \times 8
+    ''')
+    st.write(f"本次計算: ( ({s1}/2 * 0.15) + ({s2}/2 * 0.15) + ({s3}/2 * 0.10) + ({s4}/2 * 0.15) + ({s5}/2 * 0.25) + ({s6}/2 * 0.20) ) * 8 = {final_score}")
