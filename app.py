@@ -3,9 +3,9 @@ import yfinance as yf
 import pandas as pd
 
 # 設定網頁標題與排版
-st.set_page_config(page_title="市場情緒量化投資儀表板 v2.1", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="市場情緒量化投資儀表板 v2.2", page_icon="🧭", layout="wide")
 
-st.title("🧭 市場情緒量化投資儀表板 v2.1")
+st.title("🧭 市場情緒量化投資儀表板 v2.2")
 st.markdown("依據「六大指標權重」計算綜合市場分數 (-8 ~ +8)，協助判斷進出場時機。")
 st.markdown("---")
 
@@ -85,40 +85,40 @@ except Exception:
     default_bias = 5.0
 
 # ==========================================
-# 3. 側邊欄：輸入 6 大指標
+# 3. 側邊欄：輸入 6 大指標 (本次修改處)
 # ==========================================
 st.sidebar.header("📊 輸入今日指標數據")
 
-# 1. Fear & Greed (15%)
+# 1. Fear & Greed (15%) -> 修改為小數點後 2 位
 st.sidebar.markdown("### 1. 恐懼貪婪指數 (15%)")
 st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/charts/50108/cnn-fear-and-greed)")
-in_fg = st.sidebar.number_input("輸入數值 (0-100)", value=50, step=1)
+in_fg = st.sidebar.number_input("輸入數值 (例如 50.12)", value=50.00, step=0.01, format="%.2f")
 
-# 2. McClellan Oscillator (15%)
+# 2. McClellan Oscillator (15%) -> 修改為小數點後 3 位
 st.sidebar.markdown("### 2. McClellan Oscillator (15%)")
 st.sidebar.markdown("[查詢連結 (McOscillator)](https://www.mcoscillator.com/market_breadth_data/)")
-in_mcc = st.sidebar.number_input("輸入數值", value=0, step=1)
+in_mcc = st.sidebar.number_input("輸入數值 (例如 -15.123)", value=0.000, step=0.001, format="%.3f")
 
 # 3. Put/Call Ratio (10%)
 st.sidebar.markdown("### 3. Put/Call Ratio (10%)")
 st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/charts/449/us-cboe-options-put-call-ratio)")
-in_pc = st.sidebar.number_input("輸入數值", value=0.65, step=0.01)
+in_pc = st.sidebar.number_input("輸入數值", value=0.65, step=0.01, format="%.2f")
 
 # 4. VIX (15%)
 st.sidebar.markdown("### 4. VIX 恐慌指數 (15%)")
 st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/series/355/vix)")
-in_vix = st.sidebar.number_input("輸入數值", value=default_vix, step=0.1)
+in_vix = st.sidebar.number_input("輸入數值", value=default_vix, step=0.1, format="%.2f")
 
 # 5. 200日均線乖離率 (25%)
 st.sidebar.markdown("### 5. S&P 500 200日乖離率 (25%)")
 st.sidebar.markdown("[查詢連結 (Barchart)](https://www.barchart.com/stocks/quotes/$SPX/technical-analysis)")
 st.sidebar.caption(f"系統試算參考值: {default_bias}%")
-in_bias = st.sidebar.number_input("輸入百分比 (例如 5 代表 5%)", value=default_bias, step=0.1)
+in_bias = st.sidebar.number_input("輸入百分比 (例如 5 代表 5%)", value=default_bias, step=0.1, format="%.2f")
 
 # 6. Forward P/E (20%)
 st.sidebar.markdown("### 6. Forward P/E Ratio (20%)")
 st.sidebar.markdown("[查詢連結 (MacroMicro)](https://en.macromicro.me/series/20052/sp500-forward-pe-ratio)")
-in_pe = st.sidebar.number_input("輸入數值 (例如 20.5)", value=20.0, step=0.1)
+in_pe = st.sidebar.number_input("輸入數值 (例如 20.5)", value=20.0, step=0.1, format="%.2f")
 
 # ==========================================
 # 4. 計算核心邏輯
@@ -158,9 +158,17 @@ with col1:
 
 with col2:
     st.markdown("#### 📊 各指標原始得分")
+    # 格式化顯示小數點
     metrics_data = {
         "指標": ["恐懼貪婪", "McClellan", "Put/Call", "VIX", "200日乖離", "Forward P/E"],
-        "輸入值": [in_fg, in_mcc, in_pc, in_vix, f"{in_bias}%", in_pe],
+        "輸入值": [
+            f"{in_fg:.2f}", 
+            f"{in_mcc:.3f}", 
+            f"{in_pc:.2f}", 
+            f"{in_vix:.2f}", 
+            f"{in_bias:.2f}%", 
+            f"{in_pe:.2f}"
+        ],
         "得分": [s1, s2, s3, s4, s5, s6]
     }
     st.dataframe(pd.DataFrame(metrics_data), hide_index=True)
@@ -205,7 +213,7 @@ else:
     """)
 
 # ==========================================
-# 7. (新增功能) 顯示完整給分標準表
+# 7. 顯示完整給分標準表
 # ==========================================
 st.markdown("---")
 with st.expander("📖 查看 6 大指標完整給分標準表 (點擊展開)", expanded=False):
