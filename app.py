@@ -6,7 +6,7 @@ import pandas as pd
 st.set_page_config(page_title="市場情緒量化儀表板 v3.0 (趨勢濾網版)", page_icon="📈", layout="wide")
 
 st.title("📈 市場情緒量化儀表板 v3.0 (趨勢濾網版)")
-st.markdown("依據 **「趨勢狀態 (Trend)」** 自動切換權重與計分標準，協助判斷「急殺進場 (Dip-buy)」或「保守防禦」。")
+st.markdown("依據 **「趨勢狀態」** 自動切換權重與計分標準，協助判斷「急殺進場」或「保守防禦」。")
 st.markdown("---")
 
 # ==========================================
